@@ -260,23 +260,41 @@ function buildMarker(row, s) {
   group.userData.worldX = world.x;
   group.userData.worldY = world.y;
 
-  // Marker geometry is intentionally built at real-world scale:
-  // its center will be placed exactly 10 metres above the terrain.
-  var poleMaterial = new THREE.MeshBasicMaterial({color: 0x1f7a45});
-  var headMaterial = new THREE.MeshBasicMaterial({color: 0xffd21f});
+  // Marker size is derived from the scene's own bounding box instead of a
+  // fixed real-world size (e.g. 10 m), because a fixed small size is
+  // invisible at the zoomed-out, kilometers-wide scale typical of a
+  // national-park terrain scene. ~1.5% of the scene diagonal keeps the
+  // marker visibly a "pin" whether the viewer is close or far away.
+  var bbox = Q3D.application.scene.boundingBox ? Q3D.application.scene.boundingBox(true) : null;
+  var diag = (bbox && !bbox.isEmpty())
+    ? bbox.min.distanceTo(bbox.max)
+    : 2000; // fallback if bounding box is unavailable
+  var poleHeight = Math.max(diag * 0.03, 40);
+  var poleRadius = Math.max(diag * 0.0025, 3);
+  var headRadius = Math.max(diag * 0.008, 10);
+  klog("buildMarker: ukuran marker", {diag: diag, poleHeight: poleHeight, headRadius: headRadius});
+
+  // Bright, high-contrast colors and depthTest:false so the pin stays
+  // visible above the terrain mesh even if placeOnTerrain's raycast hit
+  // lands a few meters off (or fails and leaves the marker at its
+  // fallback position).
+  var poleMaterial = new THREE.MeshBasicMaterial({color: 0xff00c8, depthTest: false});
+  var headMaterial = new THREE.MeshBasicMaterial({color: 0x00e5ff, depthTest: false});
 
   var pole = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.8, 0.8, 10, 12),
+    new THREE.CylinderGeometry(poleRadius, poleRadius, poleHeight, 12),
     poleMaterial
   );
-  pole.position.z = 5;
+  pole.position.z = poleHeight / 2;
+  pole.renderOrder = 999;
   group.add(pole);
 
   var head = new THREE.Mesh(
-    new THREE.SphereGeometry(3.5, 20, 20),
+    new THREE.SphereGeometry(headRadius, 20, 20),
     headMaterial
   );
-  head.position.z = 10;
+  head.position.z = poleHeight;
+  head.renderOrder = 999;
   group.add(head);
 
   return group;
@@ -284,6 +302,13 @@ function buildMarker(row, s) {
 
 function placeOnTerrain(marker) {
   var scene = Q3D.application.scene;
+  // Always position X/Y correctly first — if raycasting below fails, the
+  // marker should still sit near the right location (just at a fallback
+  // height) rather than collapsing to the scene's local origin (0,0,0).
+  var bbox = scene && scene.boundingBox ? scene.boundingBox(true) : null;
+  var fallbackZ = (bbox && !bbox.isEmpty()) ? bbox.max.z + 20 : 500;
+  marker.position.set(marker.userData.worldX, marker.userData.worldY, fallbackZ);
+
   if (!scene || !scene.sceneLoaded && !Q3D.application.sceneLoaded) {
     klog("placeOnTerrain: scene belum siap", {hasScene: !!scene, sceneLoaded: scene && scene.sceneLoaded, appSceneLoaded: Q3D.application.sceneLoaded});
     return false;
@@ -297,9 +322,8 @@ function placeOnTerrain(marker) {
   klog("placeOnTerrain: visibleObjects()", {hasFn: typeof scene.visibleObjects, count: objects.length, worldX: marker.userData.worldX, worldY: marker.userData.worldY});
   if (!objects.length) return false;
 
-  var bbox = scene.boundingBox(true);
-  var zTop = bbox.isEmpty() ? 10000 : bbox.max.z + 1000;
-  klog("placeOnTerrain: boundingBox", {isEmpty: bbox.isEmpty(), min: bbox.min, max: bbox.max, zTop: zTop});
+  var zTop = bbox && !bbox.isEmpty() ? bbox.max.z + 1000 : 10000;
+  klog("placeOnTerrain: boundingBox", {isEmpty: !bbox || bbox.isEmpty(), min: bbox && bbox.min, max: bbox && bbox.max, zTop: zTop});
 
   var ray = new THREE.Raycaster();
   ray.set(
