@@ -188,18 +188,22 @@
     var lat = num(row[s.lat]), lon = num(row[s.lon]);
     if (!isFinite(lat) || !isFinite(lon) || !lat || !lon) return null;
 
-    // WGS84 latitude/longitude -> Web Mercator (EPSG:3857),
-    // matching the QGIS2ThreeJS scene coordinates.
+    // WGS84 latitude/longitude -> Web Mercator (EPSG:3857).
+    // IMPORTANT: QGIS2ThreeJS runs this scene in local world coordinates,
+    // so always convert map coordinates through the scene's own origin.
     var R = 6378137;
-    var x = R * lon * Math.PI / 180;
-    var y = R * Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));
+    var mapX = R * lon * Math.PI / 180;
+    var mapY = R * Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));
+    var world = Q3D.application.scene.toWorldCoordinates({x: mapX, y: mapY, z: 0}, false);
 
     var group = new THREE.Group();
     group.userData.kth = row;
     group.userData.kthLat = lat;
     group.userData.kthLon = lon;
-    group.userData.worldX = x;
-    group.userData.worldY = y;
+    group.userData.mapX = mapX;
+    group.userData.mapY = mapY;
+    group.userData.worldX = world.x;
+    group.userData.worldY = world.y;
 
     // Marker geometry is intentionally built at real-world scale:
     // its center will be placed exactly 10 metres above the terrain.
@@ -224,34 +228,32 @@
   }
   function placeOnTerrain(marker) {
     var scene = Q3D.application.scene;
-    var ray = new THREE.Raycaster();
-    var zTop = 20000;
+    if (!scene || !scene.sceneLoaded && !Q3D.application.sceneLoaded) return false;
 
+    // Raycast only against currently visible QGIS2ThreeJS layer objects.
+    // The scene uses local coordinates, already resolved in buildMarker().
+    var objects = (typeof scene.visibleObjects === "function")
+      ? scene.visibleObjects(false)
+      : [];
+    if (!objects.length) return false;
+
+    var bbox = scene.boundingBox(true);
+    var zTop = bbox.isEmpty() ? 10000 : bbox.max.z + 1000;
+    var ray = new THREE.Raycaster();
     ray.set(
       new THREE.Vector3(marker.userData.worldX, marker.userData.worldY, zTop),
       new THREE.Vector3(0, 0, -1)
     );
 
-    var objects = (typeof scene.visibleObjects === "function")
-      ? scene.visibleObjects(false)
-      : scene.children;
+    var hits = ray.intersectObjects(objects, true);
+    if (!hits.length) return false;
 
-    var hits = ray.intersectObjects(objects || [], true);
-    var terrainHit = null;
+    // First hit is the terrain surface at the KTH coordinate.
+    var terrainHit = hits[0];
+    if (!terrainHit.point || !isFinite(terrainHit.point.z)) return false;
 
-    for (var i = 0; i < hits.length; i++) {
-      // Ignore any accidental hit from an existing KTH marker group.
-      if (hits[i].object && hits[i].object.parent !== state.markerGroup) {
-        terrainHit = hits[i];
-        break;
-      }
-    }
-
-    if (!terrainHit || !isFinite(terrainHit.point.z)) return false;
-
-    // QGIS2ThreeJS uses the scene's model units. For this TNGGP scene,
-    // one scene unit corresponds to one metre, so the marker head is
-    // positioned 10 metres above the terrain surface.
+    // zScale is 1.0 in this TNGGP scene, so one world unit = one metre.
+    // The marker pole is 10 m high from the terrain surface.
     marker.position.set(
       marker.userData.worldX,
       marker.userData.worldY,
@@ -259,8 +261,21 @@
     );
     return true;
   }
+  function hideFlatPlane() {
+    var scene = Q3D.application.scene;
+    if (!scene || !scene.mapLayers) return;
+    Object.keys(scene.mapLayers).forEach(function (id) {
+      var layer = scene.mapLayers[id];
+      var name = layer && layer.properties ? String(layer.properties.name || "") : "";
+      if (/^flat\s*plane$/i.test(name) || /flat\s*panel/i.test(name)) {
+        layer.visible = false;
+      }
+    });
+  }
+
   function rebuildMarkers() {
-    if (!Q3D.application.scene) return;
+    if (!Q3D.application.scene || !Q3D.application.sceneLoaded) return;
+    hideFlatPlane();
     if (state.markerGroup) Q3D.application.scene.remove(state.markerGroup);
 
     state.markerGroup = new THREE.Group();
