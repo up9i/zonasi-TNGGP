@@ -132,11 +132,13 @@
     document.getElementById("kth-search").addEventListener("input", applyFilters);
     document.getElementById("kth-kab").addEventListener("change", function () { populateKecamatan(); applyFilters(); });
     document.getElementById("kth-kec").addEventListener("change", applyFilters);
+    document.getElementById("kth-select").addEventListener("change", openSelectedKTH);
     document.getElementById("kth-reset").addEventListener("click", function () {
       document.getElementById("kth-search").value = "";
       document.getElementById("kth-kab").value = "";
       document.getElementById("kth-kec").value = "";
-      populateKecamatan(); applyFilters();
+      document.getElementById("kth-select").value = "";
+      populateKecamatan(); populateKTHSelect(); applyFilters();
     });
   }
 
@@ -150,6 +152,37 @@
     var status = document.getElementById("kth-status");
     var when = state.loadedAt ? state.loadedAt.toLocaleTimeString("id-ID", {hour:"2-digit", minute:"2-digit"}) : "";
     status.textContent = rows.length + " KTH ditampilkan" + (when ? " • diperbarui " + when : "");
+  }
+
+  function populateKTHSelect(rows) {
+    var s = schema(state.rows), select = document.getElementById("kth-select");
+    if (!select) return;
+    var base = rows || state.filteredRows || state.rows;
+    var vals = base.map(function (r, i) {
+      var name = text(r, s.name) || ("KTH " + (i + 1));
+      var id = text(r, s.id);
+      return {key: id ? id + " | " + name : name, name: name};
+    });
+    var seen = {};
+    vals = vals.filter(function (v) {
+      if (seen[v.key]) return false;
+      seen[v.key] = true;
+      return true;
+    }).sort(function(a,b){ return a.name.localeCompare(b.name, "id"); });
+    select.innerHTML = '<option value="">Pilih KTH untuk membuka profil</option>' +
+      vals.map(function(v){ return '<option value="' + esc(v.key) + '">' + esc(v.name) + '</option>'; }).join("");
+  }
+
+  function openSelectedKTH() {
+    var select = document.getElementById("kth-select");
+    if (!select || !select.value) return;
+    var s = schema(state.rows), key = select.value;
+    var row = state.rows.filter(function(r, i) {
+      var name = text(r, s.name) || ("KTH " + (i + 1));
+      var id = text(r, s.id);
+      return (id ? id + " | " + name : name) === key;
+    })[0];
+    if (row) showProfile(row);
   }
 
   function populateKecamatan() {
@@ -181,6 +214,7 @@
       return true;
     });
     updateDashboard();
+    populateKTHSelect(state.filteredRows);
     rebuildMarkers();
   }
 
@@ -191,9 +225,10 @@
     // WGS84 latitude/longitude -> Web Mercator (EPSG:3857).
     // IMPORTANT: QGIS2ThreeJS runs this scene in local world coordinates,
     // so always convert map coordinates through the scene's own origin.
-    var R = 6378137;
-    var mapX = R * lon * Math.PI / 180;
-    var mapY = R * Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));
+    // Scene projection is CEA (+proj=cea +lat_ts=0), not Web Mercator.
+    var R = 6378137, rad = Math.PI / 180;
+    var mapX = R * lon * rad;
+    var mapY = R * Math.sin(lat * rad);
     var world = Q3D.application.scene.toWorldCoordinates({x: mapX, y: mapY, z: 0}, false);
 
     var group = new THREE.Group();
@@ -263,14 +298,26 @@
   }
   function hideFlatPlane() {
     var scene = Q3D.application.scene;
-    if (!scene || !scene.mapLayers) return;
-    Object.keys(scene.mapLayers).forEach(function (id) {
-      var layer = scene.mapLayers[id];
-      var name = layer && layer.properties ? String(layer.properties.name || "") : "";
-      if (/^flat\s*plane$/i.test(name) || /flat\s*panel/i.test(name)) {
-        layer.visible = false;
-      }
-    });
+    if (!scene) return;
+
+    if (scene.mapLayers) {
+      Object.keys(scene.mapLayers).forEach(function (id) {
+        var layer = scene.mapLayers[id];
+        var name = layer && layer.properties ? String(layer.properties.name || "") : "";
+        if (/flat\s*(plane|panel)/i.test(name)) layer.visible = false;
+      });
+    }
+
+    // Catch exported flat-plane objects even when QGIS2ThreeJS does not expose
+    // them through mapLayers. Layer 7 in this scene is the zero-height 2x2 plane.
+    var root = scene.scene || scene;
+    if (root && root.traverse) {
+      root.traverse(function(obj) {
+        var n = String(obj.name || "");
+        if (/flat\s*(plane|panel)/i.test(n)) obj.visible = false;
+        if (obj.userData && String(obj.userData.layerId || obj.userData.layer || "") === "7") obj.visible = false;
+      });
+    }
   }
 
   function rebuildMarkers() {
@@ -286,12 +333,14 @@
     state.filteredRows.forEach(function (row) {
       var marker = buildMarker(row, s);
       if (!marker) return;
-      if (!placeOnTerrain(marker)) return;
+      placeOnTerrain(marker);
       state.markerGroup.add(marker);
       state.markers.push(marker);
     });
 
     Q3D.application.scene.add(state.markerGroup);
+    hideFlatPlane();
+    installClickHandler();
     Q3D.application.render();
   }
 
