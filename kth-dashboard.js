@@ -188,9 +188,12 @@
     var lat = num(row[s.lat]), lon = num(row[s.lon]);
     if (!isFinite(lat) || !isFinite(lon) || !lat || !lon) return null;
 
+    // WGS84 latitude/longitude -> Web Mercator (EPSG:3857),
+    // matching the QGIS2ThreeJS scene coordinates.
     var R = 6378137;
     var x = R * lon * Math.PI / 180;
     var y = R * Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));
+
     var group = new THREE.Group();
     group.userData.kth = row;
     group.userData.kthLat = lat;
@@ -198,34 +201,64 @@
     group.userData.worldX = x;
     group.userData.worldY = y;
 
-    var material = new THREE.MeshBasicMaterial({color: 0x1f7a45});
-    var ringMaterial = new THREE.MeshBasicMaterial({color: 0xffffff});
-    group.add(new THREE.Mesh(new THREE.SphereGeometry(38, 18, 18), ringMaterial));
-    group.add(new THREE.Mesh(new THREE.SphereGeometry(28, 18, 18), material));
+    // Marker geometry is intentionally built at real-world scale:
+    // its center will be placed exactly 10 metres above the terrain.
+    var poleMaterial = new THREE.MeshBasicMaterial({color: 0x1f7a45});
+    var headMaterial = new THREE.MeshBasicMaterial({color: 0xffd21f});
 
-    group.onBeforeRender = function () {
-      if (!Q3D.application.camera) return;
-      var d = this.position.distanceTo(Q3D.application.camera.position);
-      var scale = Math.max(0.55, Math.min(2.2, d / 22000));
-      this.scale.setScalar(scale);
-    };
+    var pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.8, 0.8, 10, 12),
+      poleMaterial
+    );
+    pole.position.z = 5;
+    group.add(pole);
+
+    var head = new THREE.Mesh(
+      new THREE.SphereGeometry(3.5, 20, 20),
+      headMaterial
+    );
+    head.position.z = 10;
+    group.add(head);
+
     return group;
   }
-
   function placeOnTerrain(marker) {
     var scene = Q3D.application.scene;
     var ray = new THREE.Raycaster();
-    var zTop = 15000;
-    ray.set(new THREE.Vector3(marker.userData.worldX, marker.userData.worldY, zTop), new THREE.Vector3(0, 0, -1));
-    var objects = (typeof scene.visibleObjects === "function") ? scene.visibleObjects(false) : scene.children;
-    var hits = ray.intersectObjects(objects || [], true);
-    var z = 0;
-    for (var i = 0; i < hits.length; i++) {
-      if (isFinite(hits[i].point.z)) { z = hits[i].point.z; break; }
-    }
-    marker.position.set(marker.userData.worldX, marker.userData.worldY, z + 65);
-  }
+    var zTop = 20000;
 
+    ray.set(
+      new THREE.Vector3(marker.userData.worldX, marker.userData.worldY, zTop),
+      new THREE.Vector3(0, 0, -1)
+    );
+
+    var objects = (typeof scene.visibleObjects === "function")
+      ? scene.visibleObjects(false)
+      : scene.children;
+
+    var hits = ray.intersectObjects(objects || [], true);
+    var terrainHit = null;
+
+    for (var i = 0; i < hits.length; i++) {
+      // Ignore any accidental hit from an existing KTH marker group.
+      if (hits[i].object && hits[i].object.parent !== state.markerGroup) {
+        terrainHit = hits[i];
+        break;
+      }
+    }
+
+    if (!terrainHit || !isFinite(terrainHit.point.z)) return false;
+
+    // QGIS2ThreeJS uses the scene's model units. For this TNGGP scene,
+    // one scene unit corresponds to one metre, so the marker head is
+    // positioned 10 metres above the terrain surface.
+    marker.position.set(
+      marker.userData.worldX,
+      marker.userData.worldY,
+      terrainHit.point.z
+    );
+    return true;
+  }
   function rebuildMarkers() {
     if (!Q3D.application.scene) return;
     if (state.markerGroup) Q3D.application.scene.remove(state.markerGroup);
@@ -238,7 +271,7 @@
     state.filteredRows.forEach(function (row) {
       var marker = buildMarker(row, s);
       if (!marker) return;
-      placeOnTerrain(marker);
+      if (!placeOnTerrain(marker)) return;
       state.markerGroup.add(marker);
       state.markers.push(marker);
     });
