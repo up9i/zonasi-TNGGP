@@ -89,6 +89,17 @@ function num(v) {
 
 function fmt(n) { return new Intl.NumberFormat("id-ID").format(n || 0); }
 
+// Coordinates always use "." as the decimal separator (dd.ddd), unlike
+// other numeric fields (members, year) which may use Indonesian
+// thousands-separator formatting. Parsing lat/lon with num() would wrongly
+// strip a "." followed by exactly 3 digits (e.g. "-6.728" -> "-6728"),
+// so coordinates get their own, simpler parser.
+function coord(v) {
+  if (v == null || v === "") return NaN;
+  var n = parseFloat(String(v).trim().replace(",", "."));
+  return isFinite(n) ? n : NaN;
+}
+
 function unique(rows, key) {
   var set = {};
   rows.forEach(function (r) { var v = String(r[key] || "").trim(); if (v) set[v] = true; });
@@ -220,7 +231,7 @@ function applyFilters() {
 }
 
 function buildMarker(row, s) {
-  var lat = num(row[s.lat]), lon = num(row[s.lon]);
+  var lat = coord(row[s.lat]), lon = coord(row[s.lon]);
   if (!isFinite(lat) || !isFinite(lon) || !lat || !lon) return null;
 
   // WGS84 latitude/longitude -> Web Mercator (EPSG:3857).
