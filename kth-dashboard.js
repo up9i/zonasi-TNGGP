@@ -214,10 +214,8 @@
 
   function placeOnTerrain(marker) {
     var scene = Q3D.application.scene;
-    var bbox = scene.boundingBox(true);
-    var size = bbox.getSize(new THREE.Vector3());
-    var zTop = bbox.max.z + Math.max(1000, size.z + 1000);
     var ray = new THREE.Raycaster();
+    var zTop = 15000;
     ray.set(new THREE.Vector3(marker.userData.worldX, marker.userData.worldY, zTop), new THREE.Vector3(0, 0, -1));
     var hits = ray.intersectObjects(scene.visibleObjects(false), true);
     var z = 0;
@@ -316,14 +314,20 @@
       });
   }
 
-  Q3D.application.addEventListener("sceneLoaded", function () {
-    installClickHandler();
-    loadData();
-  });
+  function initializeWhenReady() {
+    makeUI();
+    var app = Q3D.application;
+    if (app.scene && app.renderer && app.camera) {
+      installClickHandler();
+      loadData();
+      return;
+    }
+    setTimeout(initializeWhenReady, 300);
+  }
 
-  if (Q3D.application.sceneLoaded) { installClickHandler(); loadData(); } else makeUI();
+  initializeWhenReady();
 
   setInterval(function () {
-    if (document.visibilityState === "visible") loadData();
+    if (document.visibilityState === "visible" && Q3D.application.scene) loadData();
   }, 5 * 60 * 1000);
 })();
