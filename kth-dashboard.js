@@ -217,7 +217,8 @@
     var ray = new THREE.Raycaster();
     var zTop = 15000;
     ray.set(new THREE.Vector3(marker.userData.worldX, marker.userData.worldY, zTop), new THREE.Vector3(0, 0, -1));
-    var hits = ray.intersectObjects(scene.visibleObjects(false), true);
+    var objects = (typeof scene.visibleObjects === "function") ? scene.visibleObjects(false) : scene.children;
+    var hits = ray.intersectObjects(objects || [], true);
     var z = 0;
     for (var i = 0; i < hits.length; i++) {
       if (isFinite(hits[i].point.z)) { z = hits[i].point.z; break; }
@@ -226,7 +227,7 @@
   }
 
   function rebuildMarkers() {
-    if (!Q3D.application.scene || !Q3D.application.sceneLoaded) return;
+    if (!Q3D.application.scene) return;
     if (state.markerGroup) Q3D.application.scene.remove(state.markerGroup);
 
     state.markerGroup = new THREE.Group();
@@ -281,12 +282,12 @@
 
   function installClickHandler() {
     if (Q3D.application._kthClickInstalled) return;
-    var original = Q3D.application.canvasClicked;
-    Q3D.application.canvasClicked = function (e) {
+    var canvas = Q3D.application.renderer && Q3D.application.renderer.domElement;
+    if (!canvas) return;
+    canvas.addEventListener("click", function (e) {
       var hit = findKTHHit(e);
-      if (hit) { showProfile(hit.userData.kth); return; }
-      original.call(Q3D.application, e);
-    };
+      if (hit) showProfile(hit.userData.kth);
+    }, false);
     Q3D.application._kthClickInstalled = true;
   }
 
