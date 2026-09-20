@@ -4,6 +4,10 @@
 
 var KTH_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQRDp7cWrVS2RXObU8YQ-xhXP31MvYiIiXYVRvUJ-QrraipDG_3AWYb37nDyDtfKJaTbtA1MEXX__zM/pub?output=csv";
 
+// TEMPORARY: set to false once markers are confirmed working, to silence logging.
+var KTH_DEBUG = true;
+function klog() { if (KTH_DEBUG && window.console) console.log.apply(console, ["[KTH]"].concat([].slice.call(arguments))); }
+
 var state = { rows: [], filteredRows: [], markers: [], markerGroup: null, selected: null, loadedAt: null };
 
 var ALIASES = {
@@ -232,7 +236,10 @@ function applyFilters() {
 
 function buildMarker(row, s) {
   var lat = coord(row[s.lat]), lon = coord(row[s.lon]);
-  if (!isFinite(lat) || !isFinite(lon) || !lat || !lon) return null;
+  if (!isFinite(lat) || !isFinite(lon) || !lat || !lon) {
+    klog("buildMarker: lat/lon tidak valid", {raw_lat: row[s.lat], raw_lon: row[s.lon], parsed_lat: lat, parsed_lon: lon});
+    return null;
+  }
 
   // WGS84 latitude/longitude -> Web Mercator (EPSG:3857).
   // IMPORTANT: QGIS2ThreeJS runs this scene in local world coordinates,
@@ -277,17 +284,22 @@ function buildMarker(row, s) {
 
 function placeOnTerrain(marker) {
   var scene = Q3D.application.scene;
-  if (!scene || !scene.sceneLoaded && !Q3D.application.sceneLoaded) return false;
+  if (!scene || !scene.sceneLoaded && !Q3D.application.sceneLoaded) {
+    klog("placeOnTerrain: scene belum siap", {hasScene: !!scene, sceneLoaded: scene && scene.sceneLoaded, appSceneLoaded: Q3D.application.sceneLoaded});
+    return false;
+  }
 
   // Raycast only against currently visible QGIS2ThreeJS layer objects.
   // The scene uses local coordinates, already resolved in buildMarker().
   var objects = (typeof scene.visibleObjects === "function")
     ? scene.visibleObjects(false)
     : [];
+  klog("placeOnTerrain: visibleObjects()", {hasFn: typeof scene.visibleObjects, count: objects.length, worldX: marker.userData.worldX, worldY: marker.userData.worldY});
   if (!objects.length) return false;
 
   var bbox = scene.boundingBox(true);
   var zTop = bbox.isEmpty() ? 10000 : bbox.max.z + 1000;
+  klog("placeOnTerrain: boundingBox", {isEmpty: bbox.isEmpty(), min: bbox.min, max: bbox.max, zTop: zTop});
 
   var ray = new THREE.Raycaster();
   ray.set(
@@ -295,6 +307,7 @@ function placeOnTerrain(marker) {
     new THREE.Vector3(0, 0, -1)
   );
   var hits = ray.intersectObjects(objects, true);
+  klog("placeOnTerrain: raycast hits", hits.length);
   if (!hits.length) return false;
 
   // First hit is the terrain surface at the KTH coordinate.
@@ -334,20 +347,28 @@ function hideFlatPlane() {
 }
 
 function rebuildMarkers() {
-  if (!Q3D.application.scene || !Q3D.application.sceneLoaded) return;
+  klog("rebuildMarkers: dipanggil", {hasScene: !!Q3D.application.scene, sceneLoaded: Q3D.application.sceneLoaded, filteredRows: state.filteredRows.length});
+  if (!Q3D.application.scene || !Q3D.application.sceneLoaded) {
+    klog("rebuildMarkers: BERHENTI karena scene/sceneLoaded belum siap");
+    return;
+  }
   hideFlatPlane();
   if (state.markerGroup) Q3D.application.scene.remove(state.markerGroup);
   state.markerGroup = new THREE.Group();
   state.markerGroup.name = "KTH Markers";
   state.markers = [];
   var s = schema(state.rows);
+  klog("rebuildMarkers: schema terdeteksi", s);
+  var placed = 0;
   state.filteredRows.forEach(function (row) {
     var marker = buildMarker(row, s);
     if (!marker) return;
-    placeOnTerrain(marker);
+    var ok = placeOnTerrain(marker);
+    if (ok) placed++;
     state.markerGroup.add(marker);
     state.markers.push(marker);
   });
+  klog("rebuildMarkers: selesai", {totalDibuat: state.markers.length, berhasilDitempatkanDiTerrain: placed});
   Q3D.application.scene.add(state.markerGroup);
   hideFlatPlane();
   installClickHandler();
@@ -403,8 +424,10 @@ function loadData() {
     .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.text(); })
     .then(function (csv) {
       var rows = parseCSV(csv);
+      klog("loadData: CSV terparse", {jumlahBaris: rows.length, contohHeader: rows.length ? Object.keys(rows[0]) : []});
       if (!rows.length) throw new Error("CSV kosong");
       var s = schema(rows);
+      klog("loadData: schema terdeteksi", s, "contoh baris pertama:", rows[0]);
       if (!s.lat || !s.lon) throw new Error("Kolom latitude/longitude tidak ditemukan.");
       state.rows = rows; state.loadedAt = new Date();
       populateKabupaten(); applyFilters();
