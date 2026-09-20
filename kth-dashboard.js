@@ -10,6 +10,51 @@ function klog() { if (KTH_DEBUG && window.console) console.log.apply(console, ["
 
 var state = { rows: [], filteredRows: [], markers: [], markerGroup: null, selected: null, loadedAt: null };
 
+// Fixed marker size in world metres. Not derived from the scene's bounding
+// box on purpose — a percentage-of-scene size looked oversized and changed
+// unpredictably between scenes. Tweak this one constant if pins still look
+// too big or too small; everything scales from it.
+var PIN_WORLD_HEIGHT = 45;
+var KTH_PIN_TEXTURE = null;
+
+function getPinTexture() {
+  if (KTH_PIN_TEXTURE) return KTH_PIN_TEXTURE;
+  var w = 64, h = 80;
+  var canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  var ctx = canvas.getContext("2d");
+  var cx = w / 2, headR = w * 0.32, headCy = headR + 4;
+
+  // Pin head (circle)
+  ctx.beginPath();
+  ctx.arc(cx, headCy, headR, 0, Math.PI * 2);
+  ctx.fillStyle = "#ff6d00";
+  ctx.fill();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "#ffffff";
+  ctx.stroke();
+
+  // Pin tail (pointed tip touches the terrain)
+  ctx.beginPath();
+  ctx.moveTo(cx - headR * 0.55, headCy + headR * 0.65);
+  ctx.lineTo(cx + headR * 0.55, headCy + headR * 0.65);
+  ctx.lineTo(cx, h - 2);
+  ctx.closePath();
+  ctx.fillStyle = "#ff6d00";
+  ctx.fill();
+
+  // Inner dot, for contrast against the head color
+  ctx.beginPath();
+  ctx.arc(cx, headCy, headR * 0.4, 0, Math.PI * 2);
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+
+  var texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  KTH_PIN_TEXTURE = texture;
+  return texture;
+}
+
 var ALIASES = {
   id: ["no_registrasi_kth", "no_registrasi", "nomor_registrasi_kth", "registrasi_kth"],
   name: ["nama_kth", "nama kelompok tani hutan", "nama_kelompok_tani_hutan"],
@@ -260,42 +305,25 @@ function buildMarker(row, s) {
   group.userData.worldX = world.x;
   group.userData.worldY = world.y;
 
-  // Marker size is derived from the scene's own bounding box instead of a
-  // fixed real-world size (e.g. 10 m), because a fixed small size is
-  // invisible at the zoomed-out, kilometers-wide scale typical of a
-  // national-park terrain scene. ~1.5% of the scene diagonal keeps the
-  // marker visibly a "pin" whether the viewer is close or far away.
-  var bbox = Q3D.application.scene.boundingBox ? Q3D.application.scene.boundingBox(true) : null;
-  var diag = (bbox && !bbox.isEmpty())
-    ? bbox.min.distanceTo(bbox.max)
-    : 2000; // fallback if bounding box is unavailable
-  var poleHeight = Math.max(diag * 0.03, 40);
-  var poleRadius = Math.max(diag * 0.0025, 3);
-  var headRadius = Math.max(diag * 0.008, 10);
-  klog("buildMarker: ukuran marker", {diag: diag, poleHeight: poleHeight, headRadius: headRadius});
+  // Marker is a single flat "pin" icon (billboard sprite that always faces
+  // the camera) instead of a 3D pole+ball. This avoids the earlier
+  // orientation bug (CylinderGeometry defaults to standing along Y, but
+  // this scene's "up" axis is Z, so the pole rendered lying on its side),
+  // and keeps the visual footprint small and consistent on the terrain.
+  var texture = getPinTexture();
+  var aspect = texture.image.width / texture.image.height;
+  var pinHeight = PIN_WORLD_HEIGHT;
+  var pinWidth = pinHeight * aspect;
 
-  // Bright, high-contrast colors and depthTest:false so the pin stays
-  // visible above the terrain mesh even if placeOnTerrain's raycast hit
-  // lands a few meters off (or fails and leaves the marker at its
-  // fallback position).
-  var poleMaterial = new THREE.MeshBasicMaterial({color: 0xff00c8, depthTest: false});
-  var headMaterial = new THREE.MeshBasicMaterial({color: 0x00e5ff, depthTest: false});
-
-  var pole = new THREE.Mesh(
-    new THREE.CylinderGeometry(poleRadius, poleRadius, poleHeight, 12),
-    poleMaterial
-  );
-  pole.position.z = poleHeight / 2;
-  pole.renderOrder = 999;
-  group.add(pole);
-
-  var head = new THREE.Mesh(
-    new THREE.SphereGeometry(headRadius, 20, 20),
-    headMaterial
-  );
-  head.position.z = poleHeight;
-  head.renderOrder = 999;
-  group.add(head);
+  var spriteMaterial = new THREE.SpriteMaterial({map: texture, transparent: true, depthTest: false});
+  var sprite = new THREE.Sprite(spriteMaterial);
+  sprite.scale.set(pinWidth, pinHeight, 1);
+  // Anchor the sprite's bottom tip (the pin's point) at the group's origin,
+  // which placeOnTerrain() sets to the terrain surface height — so the pin
+  // appears to stick into the ground rather than floating above/inside it.
+  sprite.position.z = pinHeight / 2;
+  sprite.renderOrder = 999;
+  group.add(sprite);
 
   return group;
 }
