@@ -14,7 +14,7 @@ var state = { rows: [], filteredRows: [], markers: [], markerGroup: null, select
 // box on purpose — a percentage-of-scene size looked oversized and changed
 // unpredictably between scenes. Tweak this one constant if pins still look
 // too big or too small; everything scales from it.
-var PIN_WORLD_HEIGHT = 45;
+var PIN_WORLD_HEIGHT = 100;
 var KTH_PIN_TEXTURE = null;
 
 function getPinTexture() {
